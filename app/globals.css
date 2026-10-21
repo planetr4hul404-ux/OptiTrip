@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-heading: var(--font-outfit), system-ui, sans-serif;
+    --font-body: var(--font-inter), system-ui, sans-serif;
+    --peach: #ffbe91;
+    --apricot: #ffddb0;
+    --cream: #fffce1;
+    --sky: #cfebff;
+    --ink: #44362e;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background-color: var(--cream);
+    color: var(--ink);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--apricot);
+}
+
+.glass-panel-elevated {
+  background: #ffffff;
+  border: 1px solid var(--apricot);
+  box-shadow: 0 8px 24px rgba(68, 54, 46, 0.08);
+}
+
+.glass-card-winner {
+  background: var(--apricot);
+  border: 1px solid var(--peach);
+  box-shadow: 0 8px 20px rgba(68, 54, 46, 0.1);
+}
+
+.bg-mesh {
+  background-color: var(--cream);
+}
+
+/* Animations */
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.animate-pulse-subtle {
+  animation: pulseSubtle 3s ease-in-out infinite;
+}
