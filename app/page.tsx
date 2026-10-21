@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Compass,
   MapPin,
@@ -20,6 +21,7 @@ import {
   Car,
   Sparkles,
   RefreshCw,
+  Map as MapIcon,
 } from 'lucide-react';
 
 import {
@@ -32,7 +34,9 @@ import { istClock, timeBand } from '@/lib/availabilityModel';
 import {
   geocodeLocation,
   fetchOsrmRoute,
+  createFallbackRoute,
   PREPARED_ROUTES,
+  PUNE_LANDMARKS,
   Coordinates,
 } from '@/lib/maps';
 import {
@@ -40,11 +44,28 @@ import {
   isSupabaseConfigured,
 } from '@/lib/supabase';
 
+// Dynamically import Leaflet Map (SSR-safe, Person B)
+const RouteMap = dynamic(() => import('@/components/RouteMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-72 sm:h-84 md:h-96 w-full rounded-2xl bg-[#CFEBFF]/30 border border-[#FFDDB0] flex items-center justify-center text-xs text-[#6b584b]">
+      <span>Loading interactive map...</span>
+    </div>
+  ),
+});
+
 export default function OptiTripPage() {
   // Input states
   const [originInput, setOriginInput] = useState('Pune Railway Station');
   const [destInput, setDestInput] = useState('Swargate Bus Stand');
   const [priority, setPriority] = useState<Priority>('balanced');
+
+  // Map & Route metrics state (Person B: Maps & Routing)
+  const [originCoords, setOriginCoords] = useState<Coordinates | null>(PREPARED_ROUTES[0].originCoords);
+  const [destCoords, setDestCoords] = useState<Coordinates | null>(PREPARED_ROUTES[0].destCoords);
+  const [routeGeometry, setRouteGeometry] = useState<[number, number][]>(PREPARED_ROUTES[0].waypoints);
+  const [isFallbackRoute, setIsFallbackRoute] = useState<boolean>(true);
+  const [showMap, setShowMap] = useState<boolean>(true);
 
   // Route metrics state
   const [distanceKm, setDistanceKm] = useState<number>(5.4);
@@ -120,11 +141,15 @@ export default function OptiTripPage() {
     setDestInput(temp);
   }
 
-  // Select a preset prepared route
+  // Select a preset prepared route (Person B: Reliable demo fallback)
   function handleSelectPreset(index: number) {
     const preset = PREPARED_ROUTES[index];
     setOriginInput(preset.originText);
     setDestInput(preset.destText);
+    setOriginCoords(preset.originCoords);
+    setDestCoords(preset.destCoords);
+    setRouteGeometry(preset.waypoints);
+    setIsFallbackRoute(true);
     setDistanceKm(preset.drive.distanceKm);
     setDurationMin(preset.drive.durationMin);
     setWalkDistanceKm(preset.walk.distanceKm);
@@ -155,36 +180,46 @@ export default function OptiTripPage() {
     setErrorMessage(null);
     setSupabaseStatus({ saved: false });
 
+    let origCoord: Coordinates | null = null;
+    let dstCoord: Coordinates | null = null;
+
     try {
-      // 1. Geocode origin and destination
+      // 1. Geocode origin and destination using Nominatim (with local landmark directory)
       const [originCandidates, destCandidates] = await Promise.all([
         geocodeLocation(originInput),
         geocodeLocation(destInput),
       ]);
 
       if (!originCandidates.length) {
-        throw new Error(`Could not find location: "${originInput}". Try a nearby Pune landmark.`);
+        throw new Error(`Could not find pickup location: "${originInput}". Try a nearby Pune landmark.`);
       }
       if (!destCandidates.length) {
-        throw new Error(`Could not find location: "${destInput}". Try a nearby Pune landmark.`);
+        throw new Error(`Could not find destination: "${destInput}". Try a nearby Pune landmark.`);
       }
 
-      const originCoord: Coordinates = {
+      origCoord = {
         lat: originCandidates[0].lat,
         lon: originCandidates[0].lon,
+        displayName: originCandidates[0].displayName,
       };
-      const destCoord: Coordinates = {
+      dstCoord = {
         lat: destCandidates[0].lat,
         lon: destCandidates[0].lon,
+        displayName: destCandidates[0].displayName,
       };
 
-      // 2. Fetch driving route from OSRM
-      const driveRoute = await fetchOsrmRoute(originCoord, destCoord, 'driving');
+      setOriginCoords(origCoord);
+      setDestCoords(dstCoord);
+
+      // 2. Fetch driving route from OSRM demo router with full geometry
+      const driveRoute = await fetchOsrmRoute(origCoord, dstCoord, 'driving');
 
       // Fetch walking route with safe fallback if foot router is unavailable
-      const walkRoute = await fetchOsrmRoute(originCoord, destCoord, 'walking').catch(() => ({
+      const walkRoute = await fetchOsrmRoute(origCoord, dstCoord, 'walking').catch(() => ({
         distanceKm: driveRoute.distanceKm,
         durationMin: Math.round(driveRoute.distanceKm * 12), // ~5 km/h walking speed
+        geometry: driveRoute.geometry,
+        isFallback: false,
         sourceNote: 'Estimated walking baseline (5 km/h)',
       }));
 
@@ -192,7 +227,9 @@ export default function OptiTripPage() {
       setDurationMin(driveRoute.durationMin);
       setWalkDistanceKm(walkRoute.distanceKm);
       setWalkDurationMin(walkRoute.durationMin);
-      setRouteSource('Live OSRM Routing Service');
+      setRouteGeometry(driveRoute.geometry || []);
+      setIsFallbackRoute(false);
+      setRouteSource('Route estimate (OSRM)');
 
       const ranked = recalculateRecommendations(
         driveRoute.distanceKm,
@@ -214,7 +251,43 @@ export default function OptiTripPage() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Routing lookup failed.';
       console.warn('Live routing failed, falling back to prepared baseline:', msg);
-      setErrorMessage(`${msg} You can use one of the Prepared Pune routes below for a reliable demo.`);
+
+      // If coordinates were resolved, activate transparent fallback route
+      if (origCoord && dstCoord) {
+        const fallback = createFallbackRoute(origCoord, dstCoord, originInput, destInput);
+        setDistanceKm(fallback.drive.distanceKm);
+        setDurationMin(fallback.drive.durationMin);
+        setWalkDistanceKm(fallback.walk.distanceKm);
+        setWalkDurationMin(fallback.walk.durationMin);
+        setRouteGeometry(fallback.drive.geometry || []);
+        setIsFallbackRoute(true);
+        setRouteSource(fallback.drive.sourceNote);
+
+        const ranked = recalculateRecommendations(
+          fallback.drive.distanceKm,
+          fallback.drive.durationMin,
+          fallback.walk.distanceKm,
+          fallback.walk.durationMin,
+          priority
+        );
+
+        setErrorMessage(
+          `${msg} Switched transparently to a clearly marked fallback sample route.`
+        );
+
+        await persistToSupabase(
+          originInput,
+          destInput,
+          fallback.drive.distanceKm,
+          fallback.drive.durationMin,
+          priority,
+          ranked
+        );
+      } else {
+        setErrorMessage(
+          `${msg} You can use one of the Prepared Pune routes below for a reliable demo.`
+        );
+      }
     } finally {
       setIsCalculating(false);
     }
@@ -369,6 +442,7 @@ export default function OptiTripPage() {
               <input
                 id="origin-input"
                 type="text"
+                list="pune-landmarks-list"
                 value={originInput}
                 onChange={(e) => setOriginInput(e.target.value)}
                 placeholder="e.g. Pune Railway Station"
@@ -397,6 +471,7 @@ export default function OptiTripPage() {
               <input
                 id="dest-input"
                 type="text"
+                list="pune-landmarks-list"
                 value={destInput}
                 onChange={(e) => setDestInput(e.target.value)}
                 placeholder="e.g. Swargate Bus Stand"
@@ -404,6 +479,13 @@ export default function OptiTripPage() {
               />
             </div>
           </div>
+
+          {/* Datalist for Pune landmarks autocomplete suggestions */}
+          <datalist id="pune-landmarks-list">
+            {Object.values(PUNE_LANDMARKS).map((lm) => (
+              <option key={lm.displayName} value={lm.displayName} />
+            ))}
+          </datalist>
 
           {/* Quick Preset Route Buttons */}
           <div className="mt-4 pt-4 border-t border-[#FFDDB0] flex flex-wrap items-center gap-2">
@@ -470,6 +552,40 @@ export default function OptiTripPage() {
             </div>
           </div>
         )}
+
+        {/* Interactive Route Map (Person B: Leaflet + OpenStreetMap) */}
+        <section className="mb-8">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <MapIcon className="w-5 h-5 text-[#44362e]" />
+              <h2 className="text-lg font-bold text-[#44362e]">Interactive Route Map</h2>
+              <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-[#CFEBFF] border border-[#FFBE91] text-[#44362e] font-medium">
+                Leaflet · OpenStreetMap
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMap(!showMap)}
+              className="text-xs px-3 py-1 rounded-lg bg-[#FFFCE1] hover:bg-[#FFDDB0] border border-[#FFBE91] text-[#44362e] font-medium transition-colors"
+            >
+              {showMap ? 'Hide Map' : 'Show Map'}
+            </button>
+          </div>
+
+          {showMap && (
+            <RouteMap
+              originCoords={originCoords}
+              destCoords={destCoords}
+              originName={originInput}
+              destName={destInput}
+              routeCoordinates={routeGeometry}
+              isFallback={isFallbackRoute}
+              distanceKm={distanceKm}
+              durationMin={durationMin}
+              sourceNote={routeSource}
+            />
+          )}
+        </section>
 
         {/* Priority Selector & Metric Info Bar */}
         <section className="mb-8">
