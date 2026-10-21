@@ -33,8 +33,16 @@ export interface Recommendation {
   breakdown: { cost: number; speed: number; reliability: number };
 }
 
-export const BUS_TIME_FACTOR = 1.7; // agree with Part C
 export const BUS_ACCESS_WALK_MIN = 6;
+export const MODE_SPEED_KMH = {
+  auto: (15 + 22) / 2,
+  bus: (12 + 16) / 2,
+  cab: (15 + 24) / 2,
+} as const;
+
+function travelTimeFromSpeed(distanceKm: number, speedKmh: number): number {
+  return (distanceKm / speedKmh) * 60;
+}
 
 /** Build the 4 RouteEstimates from one walking + one driving OSRM result. */
 export function deriveModeEstimates(
@@ -43,12 +51,21 @@ export function deriveModeEstimates(
 ): RouteEstimate[] {
   return [
     { mode: "walk", ...walk },
-    { mode: "auto", ...drive },
-    { mode: "cab", ...drive },
+    {
+      mode: "auto",
+      distanceKm: drive.distanceKm,
+      durationMin: travelTimeFromSpeed(drive.distanceKm, MODE_SPEED_KMH.auto),
+    },
+    {
+      mode: "cab",
+      distanceKm: drive.distanceKm,
+      durationMin: travelTimeFromSpeed(drive.distanceKm, MODE_SPEED_KMH.cab),
+    },
     {
       mode: "bus",
       distanceKm: drive.distanceKm,
-      durationMin: drive.durationMin * BUS_TIME_FACTOR + BUS_ACCESS_WALK_MIN,
+      durationMin:
+        travelTimeFromSpeed(drive.distanceKm, MODE_SPEED_KMH.bus) + BUS_ACCESS_WALK_MIN,
     },
   ];
 }

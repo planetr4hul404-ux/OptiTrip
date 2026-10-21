@@ -65,11 +65,11 @@ Show users which values are measured from an external service and which are esti
 | Road route distance and baseline duration | OSRM public demo route when available | “Route estimate (OSRM)” |
 | Bus, auto, and cab fares | Simple documented example formulas applied to route distance; choose plausible sample constants for the demo | “Estimated fare — illustrative, not a live quote” |
 | Availability/reliability | Fixed, transparent demo assumptions or a simple heuristic | “Demo estimate — not live availability” |
-| Mode-specific travel time | Route duration adjusted by documented multipliers or fixed assumptions | “Estimated time — varies in practice” |
+| Mode-specific travel time | Distance divided by transparent midpoint speed assumptions: auto 18.5 km/h, bus 14 km/h, cab 19.5 km/h | “Estimated time — varies in practice” |
 
 Do **not** describe estimated fares or availability as live, guaranteed, or real-time values. Do not present a sample formula as an official tariff. If route lookup fails, tell the user that route data is unavailable and offer a clearly marked sample route or ask them to retry; never quietly present the sample as live data.
 
-Use transparent example logic, for instance: walking time from distance and a walking-speed assumption; bus/auto/cab time from the road duration plus simple mode-specific assumptions; fares from distance-based demo formulas. Put assumptions and constants together in `estimates.ts` so the team can explain or adjust them quickly.
+Use transparent example logic, for instance: walking time from distance and a walking-speed assumption; bus/auto/cab time from distance divided by documented midpoint speed assumptions; fares from distance-based demo formulas. Put assumptions and constants together in `scoring.ts` so the team can explain or adjust them quickly.
 
 ## 5. Ranking behavior
 
@@ -140,5 +140,4 @@ If the day starts at a different time, keep the same sequence and durations. Sto
 ## 10. Definition of done
 
 The project is complete for the one-day goal when the team can run the site locally and from its Vercel URL, enter a pickup and destination, see a clear comparison of transport recommendations, switch priorities and observe the ranking change, save the query and results to Supabase, and explain which data is route-derived versus estimated. Visual polish and production readiness are outside the demo success criteria.
-
 
