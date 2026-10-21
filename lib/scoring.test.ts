@@ -1,5 +1,5 @@
 // Run: npx tsx lib/scoring.test.ts   (no framework needed)
-import { rankModes, deriveModeEstimates } from "./scoring";
+import { rankModes, deriveModeEstimates, MODE_SPEED_KMH } from "./scoring";
 import { autoFare, busFare, cabFare } from "./fareRules";
 import assert from "node:assert/strict";
 
@@ -23,6 +23,12 @@ const est = deriveModeEstimates(
   { distanceKm: 7.4, durationMin: 89 },
   { distanceKm: 8.2, durationMin: 22 }
 );
+assert.equal(MODE_SPEED_KMH.auto, 18.5);
+assert.equal(MODE_SPEED_KMH.bus, 14);
+assert.equal(MODE_SPEED_KMH.cab, 19.5);
+assert.ok(Math.abs(est.find((r) => r.mode === "auto")!.durationMin - (8.2 / 18.5) * 60) < 0.001);
+assert.ok(Math.abs(est.find((r) => r.mode === "bus")!.durationMin - ((8.2 / 14) * 60 + 6)) < 0.001);
+assert.ok(Math.abs(est.find((r) => r.mode === "cab")!.durationMin - (8.2 / 19.5) * 60) < 0.001);
 const cheapest = rankModes(est, "cheapest", day);
 const fastest = rankModes(est, "fastest", day);
 console.table(cheapest.map(({ mode, price, time, waitMin, final_score, rank }) => ({ mode, price, time, waitMin, final_score, rank })));

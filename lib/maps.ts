@@ -12,12 +12,39 @@ export interface RouteResult {
   durationMin: number;
   isFallback?: boolean;
   sourceNote: string;
+  geometry?: [number, number][];
 }
 
 export interface GeocodeResult {
   displayName: string;
   lat: number;
   lon: number;
+}
+
+export async function reverseGeocodeLocation(coordinates: Coordinates): Promise<string> {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coordinates.lat}&lon=${coordinates.lon}&zoom=18&addressdetails=1`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Nominatim reverse geocoding HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (typeof data.display_name !== 'string' || !data.display_name.trim()) {
+      throw new Error('No readable address found for the selected map point.');
+    }
+
+    return data.display_name;
+  } catch (err) {
+    console.warn('Reverse geocoding error:', err);
+    throw new Error('Could not identify that map point. The coordinates were kept.');
+  }
 }
 
 // Prepared Pune Demonstration Fallback Routes (When live APIs are unreachable or for fast 1-click testing)
@@ -96,7 +123,7 @@ export async function fetchOsrmRoute(
   profile: 'driving' | 'walking' = 'driving'
 ): Promise<RouteResult> {
   const coordinatesString = `${origin.lon},${origin.lat};${destination.lon},${destination.lat}`;
-  const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinatesString}?overview=false`;
+  const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinatesString}?overview=full&geometries=geojson`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s timeout
@@ -117,12 +144,26 @@ export async function fetchOsrmRoute(
     const route = json.routes[0];
     const distanceKm = Number((route.distance / 1000).toFixed(2));
     const durationMin = Number((route.duration / 60).toFixed(1));
+    const geometry =
+      route.geometry?.type === 'LineString' &&
+      Array.isArray(route.geometry.coordinates)
+        ? route.geometry.coordinates
+            .filter(
+              (point: unknown): point is [number, number] =>
+                Array.isArray(point) &&
+                point.length >= 2 &&
+                typeof point[0] === 'number' &&
+                typeof point[1] === 'number'
+            )
+            .map(([lon, lat]: [number, number]) => [lat, lon] as [number, number])
+        : undefined;
 
     return {
       distanceKm,
       durationMin,
       isFallback: false,
       sourceNote: `OSRM public demo router (${profile})`,
+      geometry,
     };
   } catch (err: unknown) {
     clearTimeout(timeoutId);

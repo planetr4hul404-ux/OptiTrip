@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Compass,
   MapPin,
@@ -31,6 +31,7 @@ import {
 import { istClock, timeBand } from '@/lib/availabilityModel';
 import {
   geocodeLocation,
+  reverseGeocodeLocation,
   fetchOsrmRoute,
   PREPARED_ROUTES,
   Coordinates,
@@ -39,6 +40,7 @@ import {
   logQueryAndResults,
   isSupabaseConfigured,
 } from '@/lib/supabase';
+import MapView from './MapView';
 
 export default function OptiTripPage() {
   // Input states
@@ -52,6 +54,17 @@ export default function OptiTripPage() {
   const [walkDistanceKm, setWalkDistanceKm] = useState<number>(4.9);
   const [walkDurationMin, setWalkDurationMin] = useState<number>(62);
   const [routeSource, setRouteSource] = useState<string>('Prepared Pune Benchmark Route');
+  const [originCoords, setOriginCoords] = useState<Coordinates | undefined>(
+    PREPARED_ROUTES[0].originCoords
+  );
+  const [destinationCoords, setDestinationCoords] = useState<Coordinates | undefined>(
+    PREPARED_ROUTES[0].destCoords
+  );
+  const [originFromMap, setOriginFromMap] = useState(false);
+  const [destinationFromMap, setDestinationFromMap] = useState(false);
+  const [routeGeometry, setRouteGeometry] = useState<[number, number][] | undefined>();
+  const [pinTarget, setPinTarget] = useState<'origin' | 'destination'>('origin');
+  const mapPinRequestRef = useRef(0);
 
   // Recommendations state
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -120,6 +133,48 @@ export default function OptiTripPage() {
     setDestInput(temp);
   }
 
+  async function handleMapClick(coordinates: Coordinates) {
+    const target = pinTarget;
+    const requestId = mapPinRequestRef.current + 1;
+    mapPinRequestRef.current = requestId;
+    const coordinateLabel = `Pinned map point (${coordinates.lat.toFixed(5)}, ${coordinates.lon.toFixed(5)})`;
+    const nextCoordinates = { ...coordinates, displayName: coordinateLabel };
+
+    setRouteGeometry(undefined);
+    setRouteSource('Pinned map locations — calculate to route');
+    setErrorMessage(null);
+    setSupabaseStatus({ saved: false });
+
+    if (target === 'origin') {
+      setOriginCoords(nextCoordinates);
+      setOriginInput(coordinateLabel);
+      setOriginFromMap(true);
+      setPinTarget('destination');
+    } else {
+      setDestinationCoords(nextCoordinates);
+      setDestInput(coordinateLabel);
+      setDestinationFromMap(true);
+    }
+
+    try {
+      const displayName = await reverseGeocodeLocation(coordinates);
+      if (requestId !== mapPinRequestRef.current) {
+        return;
+      }
+      if (target === 'origin') {
+        setOriginCoords({ ...coordinates, displayName });
+        setOriginInput(displayName);
+      } else {
+        setDestinationCoords({ ...coordinates, displayName });
+        setDestInput(displayName);
+      }
+    } catch (err: unknown) {
+      if (requestId === mapPinRequestRef.current) {
+        setErrorMessage(err instanceof Error ? err.message : 'Could not identify the selected map point.');
+      }
+    }
+  }
+
   // Select a preset prepared route
   function handleSelectPreset(index: number) {
     const preset = PREPARED_ROUTES[index];
@@ -130,6 +185,11 @@ export default function OptiTripPage() {
     setWalkDistanceKm(preset.walk.distanceKm);
     setWalkDurationMin(preset.walk.durationMin);
     setRouteSource(`Prepared Pune Benchmark (${preset.name})`);
+    setOriginCoords(preset.originCoords);
+    setDestinationCoords(preset.destCoords);
+    setOriginFromMap(false);
+    setDestinationFromMap(false);
+    setRouteGeometry(undefined);
     setErrorMessage(null);
 
     const ranked = recalculateRecommendations(
@@ -157,26 +217,24 @@ export default function OptiTripPage() {
 
     try {
       // 1. Geocode origin and destination
-      const [originCandidates, destCandidates] = await Promise.all([
-        geocodeLocation(originInput),
-        geocodeLocation(destInput),
+      const [originCoord, destCoord] = await Promise.all([
+        originFromMap && originCoords
+          ? Promise.resolve(originCoords)
+          : geocodeLocation(originInput).then((candidates) => {
+              if (!candidates.length) {
+                throw new Error(`Could not find location: "${originInput}". Try a nearby Pune landmark.`);
+              }
+              return candidates[0];
+            }),
+        destinationFromMap && destinationCoords
+          ? Promise.resolve(destinationCoords)
+          : geocodeLocation(destInput).then((candidates) => {
+              if (!candidates.length) {
+                throw new Error(`Could not find location: "${destInput}". Try a nearby Pune landmark.`);
+              }
+              return candidates[0];
+            }),
       ]);
-
-      if (!originCandidates.length) {
-        throw new Error(`Could not find location: "${originInput}". Try a nearby Pune landmark.`);
-      }
-      if (!destCandidates.length) {
-        throw new Error(`Could not find location: "${destInput}". Try a nearby Pune landmark.`);
-      }
-
-      const originCoord: Coordinates = {
-        lat: originCandidates[0].lat,
-        lon: originCandidates[0].lon,
-      };
-      const destCoord: Coordinates = {
-        lat: destCandidates[0].lat,
-        lon: destCandidates[0].lon,
-      };
 
       // 2. Fetch driving route from OSRM
       const driveRoute = await fetchOsrmRoute(originCoord, destCoord, 'driving');
@@ -193,6 +251,11 @@ export default function OptiTripPage() {
       setWalkDistanceKm(walkRoute.distanceKm);
       setWalkDurationMin(walkRoute.durationMin);
       setRouteSource('Live OSRM Routing Service');
+      setOriginCoords(originCoord);
+      setDestinationCoords(destCoord);
+      setOriginFromMap(false);
+      setDestinationFromMap(false);
+      setRouteGeometry(driveRoute.geometry);
 
       const ranked = recalculateRecommendations(
         driveRoute.distanceKm,
@@ -370,7 +433,10 @@ export default function OptiTripPage() {
                 id="origin-input"
                 type="text"
                 value={originInput}
-                onChange={(e) => setOriginInput(e.target.value)}
+                onChange={(e) => {
+                  setOriginInput(e.target.value);
+                  setOriginFromMap(false);
+                }}
                 placeholder="e.g. Pune Railway Station"
                 className="w-full bg-[#FFFCE1] border border-[#FFBE91] rounded-xl px-4 py-3 text-sm text-[#44362e] placeholder-[#44362e] focus:outline-none focus:ring-2 focus:ring-[#FFBE91] focus:border-[#FFBE91] transition-all"
               />
@@ -398,7 +464,10 @@ export default function OptiTripPage() {
                 id="dest-input"
                 type="text"
                 value={destInput}
-                onChange={(e) => setDestInput(e.target.value)}
+                onChange={(e) => {
+                  setDestInput(e.target.value);
+                  setDestinationFromMap(false);
+                }}
                 placeholder="e.g. Swargate Bus Stand"
                 className="w-full bg-[#FFFCE1] border border-[#FFBE91] rounded-xl px-4 py-3 text-sm text-[#44362e] placeholder-[#44362e] focus:outline-none focus:ring-2 focus:ring-[#FFBE91] focus:border-[#FFBE91] transition-all"
               />
@@ -450,6 +519,53 @@ export default function OptiTripPage() {
               )}
             </button>
           </div>
+        </section>
+
+        {/* OpenStreetMap Route Map */}
+        <section className="mb-8">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-[#44362e]">Route Map</h2>
+              <p className="text-xs text-[#44362e]">
+                Choose a pin type, click the map, then calculate the best transport mode.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPinTarget('origin')}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                  pinTarget === 'origin'
+                    ? 'border-[#FFBE91] bg-[#FFBE91] text-[#44362e]'
+                    : 'border-[#FFDDB0] bg-white text-[#44362e] hover:bg-[#FFFCE1]'
+                }`}
+              >
+                Set pickup
+              </button>
+              <button
+                type="button"
+                onClick={() => setPinTarget('destination')}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                  pinTarget === 'destination'
+                    ? 'border-[#FFBE91] bg-[#CFEBFF] text-[#44362e]'
+                    : 'border-[#FFDDB0] bg-white text-[#44362e] hover:bg-[#FFFCE1]'
+                }`}
+              >
+                Set drop
+              </button>
+            </div>
+          </div>
+          <MapView
+            origin={originCoords}
+            destination={destinationCoords}
+            routeGeometry={routeGeometry}
+            pinTarget={pinTarget}
+            onMapClick={handleMapClick}
+          />
+          <p className="mt-2 text-xs text-[#44362e]">
+            Click the map to set the {pinTarget === 'origin' ? 'pickup' : 'drop'} point. Your next click will
+            {pinTarget === 'origin' ? ' select the drop point.' : ' update the drop point.'}
+          </p>
         </section>
 
         {/* Error / Fallback Banner */}
@@ -734,17 +850,12 @@ export default function OptiTripPage() {
             </div>
             <div className="p-3 rounded-xl bg-[#FFFCE1] border border-[#FFDDB0]">
               <div className="font-semibold text-[#44362e]">PMPML Bus Fares & Time</div>
-              <div className="text-[#6b584b] mt-1">Official 11-stage fare chart with 1.7x traffic multiplier and 6-minute walking access buffer.</div>
+              <div className="text-[#6b584b] mt-1">Official 11-stage fare chart with a 14 km/h bus-speed estimate and 6-minute walking access buffer.</div>
             </div>
           </div>
         </section>
       </div>
 
-      {/* Footer */}
-      <footer className="mt-16 border-t border-[#FFDDB0] text-center text-xs text-[#6b584b] py-6">
-        <p>OptiTrip — One-Day Demonstration Project · Team A, B, C</p>
-        <p className="mt-1 text-[#6b584b]">Built with Next.js, TypeScript, OpenStreetMap, and Supabase · Deployed on Vercel</p>
-      </footer>
     </main>
   );
 }

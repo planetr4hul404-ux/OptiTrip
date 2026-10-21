@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 @layer base {
   :root {
@@ -41,6 +42,16 @@
 
 .bg-mesh {
   background-color: var(--cream);
+}
+
+.map-shell {
+  background: var(--sky);
+  border: 1px solid var(--apricot);
+}
+
+.leaflet-container {
+  min-height: 20rem;
+  font-family: var(--font-body);
 }
 
 /* Animations */
